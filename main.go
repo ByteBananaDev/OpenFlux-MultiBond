@@ -325,6 +325,20 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --direct-dial=<addr>     DirectTransport: exit host:port (client).
       --direct-listen=<addr>   DirectTransport: listen addr on exit.
 
+MULTIBOND  (adaptive session routing)
+      --bond                   Enable adaptive MultiBond scheduling.
+      --bond-max=N             Maximum physical channels, up to 256.
+                               Default: 256.
+      --bond-active=N          Target active channels. Default: 196.
+      --bond-min-active=N      Emergency minimum active channels. Default: 4.
+      --bond-preferred-rtt=D   Preferred averaged RTT. Default: 120ms.
+      --bond-max-rtt=D         Normal RTT ceiling. Default: 150ms.
+      --bond-emergency-rtt=D   Emergency-only RTT ceiling. Default: 300ms.
+      --bond-rtt-spread=D      Maximum RTT spread for future striped groups.
+                               Default: 30ms.
+                               RTT is averaged; one spike does not demote a
+                               channel. Throughput has more weight than RTT.
+
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
                                and wintun.dll next to the binary) / NEPacketTunnel
@@ -432,6 +446,35 @@ DEPRECATED (removed in v2)
 		applyConfString(conf.Interface, "CookieStore", "cookie-store", cookieStorePath, setFlags)
 		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
 		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
+
+		if v, ok := confValue(conf.Interface, "Bond"); ok && !setFlags["bond"] {
+			*bondEnabled = confBool(v, *bondEnabled)
+		}
+		if v, ok := confValue(conf.Interface, "BondMax"); ok && !setFlags["bond-max"] {
+			*bondMaxChannels = confInt(v, *bondMaxChannels)
+		}
+		if v, ok := confValue(conf.Interface, "BondActive"); ok && !setFlags["bond-active"] {
+			*bondTargetActive = confInt(v, *bondTargetActive)
+		}
+		if v, ok := confValue(conf.Interface, "BondMinActive"); ok && !setFlags["bond-min-active"] {
+			*bondMinActive = confInt(v, *bondMinActive)
+		}
+		parseBondDuration := func(key, flagName string, target *time.Duration) {
+			v, ok := confValue(conf.Interface, key)
+			if !ok || setFlags[flagName] {
+				return
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				log.Fatalf("--config: %s=%q: %v", key, v, err)
+			}
+			*target = d
+		}
+		parseBondDuration("BondPreferredRTT", "bond-preferred-rtt", bondPreferredRTT)
+		parseBondDuration("BondMaxRTT", "bond-max-rtt", bondMaxRTT)
+		parseBondDuration("BondEmergencyRTT", "bond-emergency-rtt", bondEmergencyRTT)
+		parseBondDuration("BondRTTSpread", "bond-rtt-spread", bondRTTSpread)
+
 		if v, ok := confValue(conf.Interface, "Debug"); ok && !setFlags["debug"] {
 			if b, err := strconv.Atoi(v); err == nil {
 				*debug = b
