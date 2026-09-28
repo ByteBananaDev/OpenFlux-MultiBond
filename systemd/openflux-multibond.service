@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenFlux MultiBond exit node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/openflux-multibond --config=/etc/openflux-multibond/exit.conf
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/openflux-multibond /run/openflux-multibond
+RuntimeDirectory=openflux-multibond
+StateDirectory=openflux-multibond
+
+[Install]
+WantedBy=multi-user.target
