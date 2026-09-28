@@ -94,6 +94,16 @@ func (s *Session) bondObserveBytes(name string, n int) {
 	}
 }
 
+func (s *Session) bondObserveSendResult(name string, err error) {
+	if st := s.bondState(); st != nil {
+		if err != nil {
+			st.scheduler.ObserveLoss(name, 1)
+			return
+		}
+		st.scheduler.ObserveLoss(name, 0)
+	}
+}
+
 // bondPickFlow returns nil when MultiBond is disabled or when its active set
 // does not currently contain a carrier that is live in this Session.
 func (s *Session) bondPickFlow(flowHash uint64, live []*transportLink) *transportLink {
