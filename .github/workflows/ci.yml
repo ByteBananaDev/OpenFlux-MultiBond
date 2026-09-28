@@ -27,6 +27,8 @@ jobs:
           test "$(grep -c '^\\[Transport ' "$tmpdir/client.conf")" -eq 6
           test "$(grep -c '^\\[Transport ' "$tmpdir/exit.conf")" -eq 6
           rm -rf "$tmpdir"
+      - name: Local MultiBond end-to-end
+        run: bash scripts/multibond-e2e-local.sh
       - run: go test ./... -count=1
       - run: go test -race ./... -count=1
       - run: go vet ./...
