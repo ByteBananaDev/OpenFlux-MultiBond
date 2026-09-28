@@ -13,12 +13,18 @@ import (
 
 // sessionBondState is intentionally kept outside Session so the MultiBond
 // integration stays small and easy to rebase on top of upstream OpenFlux.
+type bondFlowPin struct {
+	channel  string
+	lastUsed time.Time
+}
+
 type sessionBondState struct {
 	scheduler   *bond.Scheduler
 	mu          sync.Mutex
 	probeCursor int
 	lastSummary string
 	lastDetail  time.Time
+	flows       map[uint64]bondFlowPin
 }
 
 var sessionBondStates sync.Map // map[*Session]*sessionBondState
@@ -41,7 +47,10 @@ func (s *Session) EnableBond(cfg bond.Config) error {
 	}
 	s.mu.Unlock()
 
-	st := &sessionBondState{scheduler: bond.New(cfg)}
+	st := &sessionBondState{
+		scheduler: bond.New(cfg),
+		flows:     make(map[uint64]bondFlowPin),
+	}
 	for _, l := range links {
 		if err := st.scheduler.Register(l.name, fmt.Sprintf("%T", l.raw)); err != nil {
 			return err
@@ -117,12 +126,34 @@ func (s *Session) bondPickFlow(flowHash uint64, live []*transportLink) *transpor
 	if st == nil {
 		return nil
 	}
+
+	// Existing flows stay pinned to the same carrier while it remains live.
+	// This avoids packet reordering when adaptive scores change from one
+	// rebalance to the next.
+	now := time.Now()
+	st.mu.Lock()
+	if pin, ok := st.flows[flowHash]; ok {
+		for _, l := range live {
+			if l.name == pin.channel {
+				pin.lastUsed = now
+				st.flows[flowHash] = pin
+				st.mu.Unlock()
+				return l
+			}
+		}
+		delete(st.flows, flowHash)
+	}
+	st.mu.Unlock()
+
 	ch, ok := st.scheduler.PickFlow(flowHash)
 	if !ok {
 		return nil
 	}
 	for _, l := range live {
 		if l.name == ch.Name {
+			st.mu.Lock()
+			st.flows[flowHash] = bondFlowPin{channel: l.name, lastUsed: now}
+			st.mu.Unlock()
 			return l
 		}
 	}
@@ -220,6 +251,18 @@ func (s *Session) bondRefresh() {
 			utils.Debugf("[BOND] top reserve: %s", formatBondChannels(snap.Reserve, 4))
 		}
 	}
+
+	// Bound the flow-pinning table. Five minutes of inactivity is long enough
+	// to cover ordinary TCP bursts while preventing an unbounded map on busy
+	// gateways.
+	const flowPinTTL = 5 * time.Minute
+	st.mu.Lock()
+	for key, pin := range st.flows {
+		if now.Sub(pin.lastUsed) >= flowPinTTL {
+			delete(st.flows, key)
+		}
+	}
+	st.mu.Unlock()
 }
 
 func formatBondChannels(ch []bond.Channel, limit int) string {
