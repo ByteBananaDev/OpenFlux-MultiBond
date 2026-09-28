@@ -171,3 +171,23 @@ func TestObserveBytesBuildsThroughput(t *testing.T) {
 		t.Fatalf("unexpected throughput %.2f", snap.Channels[0].Throughput)
 	}
 }
+
+
+func TestHealthyReserveDoesNotWaitRecoveryHold(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TargetActive = 3
+	cfg.MinActive = 1
+	cfg.RecoveryHold = 15 * time.Second
+	s := New(cfg)
+	for _, n := range []string{"a", "b", "c"} {
+		_ = s.Register(n, "x")
+		s.SetConnected(n, true)
+		for i := 0; i < 3; i++ {
+			s.ObserveRTT(n, 60*time.Millisecond)
+		}
+	}
+	snap := s.Rebalance()
+	if len(snap.Active) != 3 {
+		t.Fatalf("healthy reserve channels should activate immediately, got %d", len(snap.Active))
+	}
+}
