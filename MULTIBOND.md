@@ -19,8 +19,8 @@ Implemented:
 - normal RTT ceiling: **150 ms**;
 - emergency ceiling: **300 ms**, used only to preserve minimum connectivity;
 - throughput weighted more heavily than latency;
-- reconnect penalty and loss input in the score;
-- weighted rendezvous hashing so ordinary IP flows stay stable on one carrier;
+- reconnect penalty and send-failure EWMA in the score;
+- weighted rendezvous hashing plus a flow-pin table so established IP flows stay on one carrier while it remains ACTIVE;
 - bounded background RTT probing: 8 carriers/second;
 - runtime channel add/remove support;
 - transport agnostic: Yandex legacy, Volga, Boards, Mail.ru, Cups, MAX/WebRTC and Direct can share the pool;
@@ -30,7 +30,7 @@ Default score:
 
 - throughput: 50%;
 - averaged RTT: 30%;
-- packet-loss input: 15%;
+- send-failure EWMA: 15%;
 - reconnect/stability: 5%.
 
 ## RTT policy
@@ -127,8 +127,17 @@ Every second MultiBond refreshes transport state and recomputes the pool.
 ```
 
 When an active carrier disappears, eligible reserve carriers can replace it.
+A reserve channel only replaces a healthy active channel when its score is at
+least 10% better by default, which prevents constant pool flapping.
+
+Established flows are pinned to their selected carrier while it remains ACTIVE.
+If that carrier fails or is demoted (for example after sustained RTT above the
+configured ceiling), the flow is repinned to the current active pool. Idle pins
+expire after five minutes.
+
 RTT probing is deliberately bounded rather than pinging all 256 channels every
-second.
+second. Pool changes are logged immediately; top active/reserve channel metrics
+are logged periodically at debug level 2.
 
 ## Important phase-1 limitation
 
@@ -150,3 +159,74 @@ Phase 2 will add:
 
 The scheduler already contains `PickStripe()` with an RTT-spread limit, but
 it is not wired into packet transmission yet.
+
+
+## Managing many channels
+
+For large pools, keep the channel inventory in CSV instead of hand-writing
+hundreds of INI sections.
+
+Start from:
+
+```text
+examples/channels.example.csv
+```
+
+Generate a client config:
+
+```bash
+python3 scripts/generate-multibond-config.py \
+  --role client \
+  --channels channels.csv \
+  --out client.conf \
+  --bond-max 256 \
+  --bond-active 196
+```
+
+Generate an exit config:
+
+```bash
+python3 scripts/generate-multibond-config.py \
+  --role exit \
+  --channels channels.csv \
+  --out exit.conf \
+  --bond-max 256 \
+  --bond-active 196 \
+  --mode l3
+```
+
+## Linux exit service
+
+After a successful smoke test:
+
+```bash
+sudo scripts/install-exit-systemd.sh exit.conf secret.txt --start
+```
+
+Useful commands:
+
+```bash
+sudo systemctl status openflux-multibond
+sudo journalctl -fu openflux-multibond
+sudo scripts/multibond-doctor.sh
+```
+
+The installed service uses:
+
+```text
+/usr/local/bin/openflux-multibond
+/etc/openflux-multibond/exit.conf
+/var/lib/openflux-multibond/secret.txt
+/var/lib/openflux-multibond/        mutable cookie/state files
+```
+
+## Validation
+
+From a source checkout:
+
+```bash
+bash scripts/multibond-smoke.sh
+```
+
+This runs scheduler/session tests, the full Go test suite, `go vet`, a native
+build and Linux/macOS/Windows cross-builds.
