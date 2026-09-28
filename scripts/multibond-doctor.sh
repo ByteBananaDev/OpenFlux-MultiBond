@@ -58,7 +58,11 @@ fi
 secret="$(awk -F= '/^[[:space:]]*EncryptionKeyFile[[:space:]]*=/{sub(/^[[:space:]]*/,"",$2); sub(/[[:space:]]*$/,"",$2); print $2; exit}' "$CONFIG")"
 if [[ -n "$secret" ]]; then
   if [[ "$secret" != /* ]]; then
-    secret="$(dirname "$CONFIG")/$secret"
+    if [[ "$CONFIG" == "/etc/openflux-multibond/exit.conf" ]]; then
+      secret="/var/lib/openflux-multibond/$secret"
+    else
+      secret="$(dirname "$CONFIG")/$secret"
+    fi
   fi
   if [[ -f "$secret" ]]; then
     ok "encryption key exists"
