@@ -13,7 +13,7 @@ if [[ -n "$bad" ]]; then
 fi
 
 echo "== script/config tooling =="
-bash -n scripts/multibond-smoke.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
+bash -n scripts/multibond-smoke.sh scripts/multibond-e2e-local.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
 python3 -m py_compile scripts/generate-multibond-config.py
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -23,6 +23,9 @@ grep -q '^Role = client
 
 echo "== Session tests =="
 go test ./transport -run 'TestSession|Bond' -count=1
+
+echo "== local end-to-end =="
+bash scripts/multibond-e2e-local.sh
 
 echo "== full unit suite =="
 go test ./... -count=1
