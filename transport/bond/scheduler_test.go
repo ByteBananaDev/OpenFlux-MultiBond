@@ -191,3 +191,59 @@ func TestHealthyReserveDoesNotWaitRecoveryHold(t *testing.T) {
 		t.Fatalf("healthy reserve channels should activate immediately, got %d", len(snap.Active))
 	}
 }
+
+
+func TestPromotionMarginPreventsFlap(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TargetActive = 1
+	cfg.MinActive = 1
+	cfg.RecoveryHold = 0
+	cfg.PromoteMargin = 0.10
+	s := New(cfg)
+
+	for _, n := range []string{"a", "b"} {
+		_ = s.Register(n, "x")
+		s.SetConnected(n, true)
+		for i := 0; i < 4; i++ {
+			s.ObserveRTT(n, 60*time.Millisecond)
+		}
+	}
+	s.ObserveThroughput("a", 100_000)
+	s.ObserveThroughput("b", 95_000)
+	first := s.Rebalance()
+	if len(first.Active) != 1 {
+		t.Fatalf("active=%d, want 1", len(first.Active))
+	}
+	active := first.Active[0].Name
+
+	// Improve the reserve only slightly; it must not replace the active link.
+	reserve := "a"
+	if active == "a" {
+		reserve = "b"
+	}
+	s.ObserveThroughput(reserve, 102_000)
+	second := s.Rebalance()
+	if len(second.Active) != 1 || second.Active[0].Name != active {
+		t.Fatalf("small score improvement caused flap: first=%s second=%v", active, second.Active)
+	}
+}
+
+func TestLossEWMAZeroIsARealSample(t *testing.T) {
+	cfg := DefaultConfig()
+	s := New(cfg)
+	_ = s.Register("a", "x")
+	s.SetConnected("a", true)
+
+	for i := 0; i < 10; i++ {
+		s.ObserveLoss("a", 0)
+	}
+	s.ObserveLoss("a", 1)
+
+	snap := s.Snapshot()
+	if len(snap.Channels) != 1 {
+		t.Fatal("missing channel")
+	}
+	if snap.Channels[0].Loss >= 0.5 {
+		t.Fatalf("single failure dominated loss EWMA: %.3f", snap.Channels[0].Loss)
+	}
+}
