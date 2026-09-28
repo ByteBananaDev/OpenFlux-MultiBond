@@ -17,6 +17,8 @@ type sessionBondState struct {
 	scheduler   *bond.Scheduler
 	mu          sync.Mutex
 	probeCursor int
+	lastSummary string
+	lastDetail  time.Time
 }
 
 var sessionBondStates sync.Map // map[*Session]*sessionBondState
@@ -194,8 +196,53 @@ func (s *Session) bondRefresh() {
 		st.scheduler.SetReconnects(sm.name, sm.reconnects)
 	}
 	snap := st.scheduler.Rebalance()
-	utils.Debugf("[BOND] pool total=%d active=%d reserve=%d failed=%d",
+	summary := fmt.Sprintf("total=%d active=%d reserve=%d failed=%d",
 		len(snap.Channels), len(snap.Active), len(snap.Reserve), len(snap.Failed))
+
+	st.mu.Lock()
+	changed := summary != st.lastSummary
+	if changed {
+		st.lastSummary = summary
+	}
+	now := time.Now()
+	detailDue := st.lastDetail.IsZero() || now.Sub(st.lastDetail) >= 15*time.Second
+	if detailDue {
+		st.lastDetail = now
+	}
+	st.mu.Unlock()
+
+	if changed {
+		utils.Debugf("[BOND] pool %s", summary)
+	}
+	if detailDue {
+		utils.Debugf("[BOND] top active: %s", formatBondChannels(snap.Active, 8))
+		if len(snap.Reserve) > 0 {
+			utils.Debugf("[BOND] top reserve: %s", formatBondChannels(snap.Reserve, 4))
+		}
+	}
+}
+
+func formatBondChannels(ch []bond.Channel, limit int) string {
+	if len(ch) == 0 {
+		return "none"
+	}
+	if limit <= 0 || limit > len(ch) {
+		limit = len(ch)
+	}
+	out := ""
+	for i := 0; i < limit; i++ {
+		c := ch[i]
+		if i > 0 {
+			out += " | "
+		}
+		kbps := c.Throughput / 1024
+		out += fmt.Sprintf("%s rtt=%v rate=%.1fKiB/s loss=%.1f%% score=%.3f",
+			c.Name, c.RTT.Round(time.Millisecond), kbps, c.Loss*100, c.Score)
+	}
+	if len(ch) > limit {
+		out += fmt.Sprintf(" | +%d more", len(ch)-limit)
+	}
+	return out
 }
 
 func (s *Session) bondProbe(limit int) {
