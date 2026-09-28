@@ -40,6 +40,15 @@ install -d -m 0700 /etc/openflux-multibond
 install -d -m 0700 /var/lib/openflux-multibond
 install -m 0600 "$CONFIG_SRC" /etc/openflux-multibond/exit.conf
 install -m 0600 "$SECRET_SRC" /var/lib/openflux-multibond/secret.txt
+
+# The service starts in /var/lib/openflux-multibond, so normalize the
+# installed config to the secret copied above regardless of the source path.
+if grep -q '^[[:space:]]*EncryptionKeyFile[[:space:]]*=' /etc/openflux-multibond/exit.conf; then
+  sed -i -E 's|^[[:space:]]*EncryptionKeyFile[[:space:]]*=.*$|EncryptionKeyFile = secret.txt|' /etc/openflux-multibond/exit.conf
+else
+  echo "EncryptionKeyFile = secret.txt" >> /etc/openflux-multibond/exit.conf
+fi
+
 install -m 0644 systemd/openflux-multibond.service /etc/systemd/system/openflux-multibond.service
 
 systemctl daemon-reload
