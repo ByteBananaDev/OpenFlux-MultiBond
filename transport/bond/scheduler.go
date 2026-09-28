@@ -413,6 +413,13 @@ func latencyFactor(rtt time.Duration, samples int, cfg Config) float64 {
 	}
 }
 
+func (s *Scheduler) IsActive(name string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c := s.channels[name]
+	return c != nil && c.Connected && c.State == StateActive
+}
+
 func (s *Scheduler) PickFlow(flowHash uint64) (Channel, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
