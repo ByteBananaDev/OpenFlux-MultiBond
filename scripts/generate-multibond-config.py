@@ -3,8 +3,14 @@ import argparse
 import csv
 from pathlib import Path
 
+FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
+
 def q(v: str) -> str:
     return (v or "").strip()
+
+def enabled(row) -> bool:
+    value = q(row.get("enabled", ""))
+    return not value or value.lower() not in FALSE_VALUES
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Generate OpenFlux MultiBond config from channels CSV")
@@ -25,14 +31,17 @@ def main() -> int:
     args = p.parse_args()
 
     rows = []
-    with open(args.channels, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            if not q(row.get("name", "")):
+    with open(args.channels, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames or "name" not in reader.fieldnames or "type" not in reader.fieldnames:
+            raise SystemExit("channels CSV must contain name and type columns")
+        for row in reader:
+            if not q(row.get("name", "")) or not enabled(row):
                 continue
-            rows.append({k: q(v) for k, v in row.items()})
+            rows.append({k: q(v) for k, v in row.items() if k is not None})
 
     if not rows:
-        raise SystemExit("no channels found")
+        raise SystemExit("no enabled channels found")
     if len(rows) > args.bond_max:
         raise SystemExit(f"{len(rows)} channels exceed --bond-max={args.bond_max}")
     if not (1 <= args.bond_max <= 256):
@@ -97,7 +106,7 @@ def main() -> int:
             lines.append(f"URL = {url}")
 
     Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"wrote {args.out}: {len(rows)} channels")
+    print(f"wrote {args.out}: {len(rows)} enabled channels")
     return 0
 
 if __name__ == "__main__":
