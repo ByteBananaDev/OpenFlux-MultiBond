@@ -56,6 +56,10 @@ func (s *Session) bondState() *sessionBondState {
 	return nil
 }
 
+func (s *Session) stopBond() {
+	sessionBondStates.Delete(s)
+}
+
 func (s *Session) bondRegister(name, kind string) error {
 	st := s.bondState()
 	if st == nil {
