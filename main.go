@@ -15,6 +15,7 @@ import (
 	"openflux/netbind"
 	"openflux/socks5"
 	"openflux/transport"
+	"openflux/transport/bond"
 	"openflux/transport/control"
 	"openflux/transport/cupsonline"
 	"openflux/transport/ipc"
@@ -239,6 +240,16 @@ func main() {
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
+
+	bondEnabled := flag.Bool("bond", false, "Enable adaptive MultiBond scheduling across session transports")
+	bondMaxChannels := flag.Int("bond-max", 256, "MultiBond maximum physical channels (1..256)")
+	bondTargetActive := flag.Int("bond-active", 196, "MultiBond target number of active channels")
+	bondMinActive := flag.Int("bond-min-active", 4, "MultiBond minimum emergency active channels")
+	bondPreferredRTT := flag.Duration("bond-preferred-rtt", 120*time.Millisecond, "MultiBond preferred averaged RTT")
+	bondMaxRTT := flag.Duration("bond-max-rtt", 150*time.Millisecond, "MultiBond normal RTT ceiling")
+	bondEmergencyRTT := flag.Duration("bond-emergency-rtt", 300*time.Millisecond, "MultiBond emergency RTT ceiling")
+	bondRTTSpread := flag.Duration("bond-rtt-spread", 30*time.Millisecond, "Maximum RTT spread for future striped groups")
+
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -676,8 +687,8 @@ DEPRECATED (removed in v2)
 	// Validate --codec with the multi-transport path. Session always uses
 	// BatchedTransport, so --codec=legacy is only valid in single-transport
 	// non-negotiated mode.
-	if *negotiate && *codec != codecBatched {
-		log.Fatal("--negotiate requires --codec=batched")
+	if (*negotiate || *bondEnabled) && *codec != codecBatched {
+		log.Fatal("--negotiate/--bond requires --codec=batched")
 	}
 
 	// Encryption secret is mandatory when --negotiate is set.
@@ -725,9 +736,9 @@ DEPRECATED (removed in v2)
 	// [Transport] sections in a .conf describe a multi-transport session
 	// just like --transports; without this they were silently ignored and
 	// only the single --transport ran.
-	if *negotiate || *transportsFlag != "" || len(confTransports) > 0 {
+	if *negotiate || *bondEnabled || *transportsFlag != "" || len(confTransports) > 0 {
 		if secret == "" {
-			log.Fatal("--transports/--negotiate/.conf transports require --encryption-key-file")
+			log.Fatal("--transports/--negotiate/--bond/.conf transports require --encryption-key-file")
 		}
 
 		caps := transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP
@@ -750,6 +761,23 @@ DEPRECATED (removed in v2)
 
 		if err := registerBootstrapTransports(managerInst, specs, config, secret, sessionContext, rooms); err != nil {
 			log.Fatalf("bootstrap transports: %v", err)
+		}
+
+		if *bondEnabled {
+			bcfg := bond.DefaultConfig()
+			bcfg.MaxChannels = *bondMaxChannels
+			bcfg.TargetActive = *bondTargetActive
+			bcfg.MinActive = *bondMinActive
+			bcfg.PreferredRTT = *bondPreferredRTT
+			bcfg.MaxRTT = *bondMaxRTT
+			bcfg.EmergencyMaxRTT = *bondEmergencyRTT
+			bcfg.MaxRTTSpread = *bondRTTSpread
+			if err := sess.EnableBond(bcfg); err != nil {
+				log.Fatalf("enable MultiBond: %v", err)
+			}
+			log.Printf("MultiBond: enabled max=%d target-active=%d min-active=%d preferred-rtt=%v max-rtt=%v emergency-rtt=%v",
+				bcfg.MaxChannels, bcfg.TargetActive, bcfg.MinActive,
+				bcfg.PreferredRTT, bcfg.MaxRTT, bcfg.EmergencyMaxRTT)
 		}
 
 		// Persist each cookie-carrying transport's jar and replay what was
@@ -917,7 +945,7 @@ DEPRECATED (removed in v2)
 	switch *role {
 	case roleExit:
 		if *shareFlag {
-			session := *negotiate || *transportsFlag != "" || len(confTransports) > 0
+			session := *negotiate || *bondEnabled || *transportsFlag != "" || len(confTransports) > 0
 			host := *shareHost
 			if host == "" {
 				host = publicIPv4()
