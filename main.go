@@ -727,6 +727,39 @@ DEPRECATED (removed in v2)
 		}
 	}
 
+	// Validate transport names and MultiBond limits before any carrier is
+	// started, so configuration mistakes fail fast and predictably.
+	seenTransportNames := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if strings.TrimSpace(spec.Name) == "" {
+			log.Fatal("transport name must not be empty")
+		}
+		if _, exists := seenTransportNames[spec.Name]; exists {
+			log.Fatalf("duplicate transport name %q", spec.Name)
+		}
+		seenTransportNames[spec.Name] = struct{}{}
+	}
+	if *bondEnabled {
+		switch {
+		case *bondMaxChannels < 1 || *bondMaxChannels > 256:
+			log.Fatalf("--bond-max must be in 1..256, got %d", *bondMaxChannels)
+		case *bondTargetActive < 1 || *bondTargetActive > *bondMaxChannels:
+			log.Fatalf("--bond-active must be in 1..bond-max, got %d", *bondTargetActive)
+		case *bondMinActive < 1 || *bondMinActive > *bondTargetActive:
+			log.Fatalf("--bond-min-active must be in 1..bond-active, got %d", *bondMinActive)
+		case *bondPreferredRTT <= 0:
+			log.Fatalf("--bond-preferred-rtt must be > 0, got %v", *bondPreferredRTT)
+		case *bondMaxRTT <= *bondPreferredRTT:
+			log.Fatalf("--bond-max-rtt (%v) must be greater than preferred RTT (%v)", *bondMaxRTT, *bondPreferredRTT)
+		case *bondEmergencyRTT < *bondMaxRTT:
+			log.Fatalf("--bond-emergency-rtt (%v) must be >= max RTT (%v)", *bondEmergencyRTT, *bondMaxRTT)
+		case *bondRTTSpread <= 0:
+			log.Fatalf("--bond-rtt-spread must be > 0, got %v", *bondRTTSpread)
+		case len(specs) > *bondMaxChannels:
+			log.Fatalf("configured %d transports but --bond-max=%d", len(specs), *bondMaxChannels)
+		}
+	}
+
 	// Validate --codec with the multi-transport path. Session always uses
 	// BatchedTransport, so --codec=legacy is only valid in single-transport
 	// non-negotiated mode.
