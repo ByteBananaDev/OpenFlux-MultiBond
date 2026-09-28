@@ -164,6 +164,20 @@ func (s *Session) AddTransport(name string, raw Transport, secret, context strin
 	s.links[name] = link
 	s.order = insertByPriority(s.order, name, link.priority, s.links)
 	s.mu.Unlock()
+
+	if err := s.bondRegister(name, fmt.Sprintf("%T", raw)); err != nil {
+		s.mu.Lock()
+		delete(s.links, name)
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+		return fmt.Errorf("session: bond register %q: %w", name, err)
+	}
+
 	utils.Debugf("[SESSION] AddTransport name=%q type=%T priority=%d", name, raw, priority)
 	return nil
 }
