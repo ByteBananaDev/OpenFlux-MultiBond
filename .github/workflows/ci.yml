@@ -19,13 +19,14 @@ jobs:
           cache: true
       - name: Validate MultiBond tooling
         run: |
-          bash -n scripts/multibond-smoke.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
-          python3 -m py_compile scripts/generate-multibond-config.py
+          bash -n scripts/multibond-smoke.sh scripts/multibond-e2e-local.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
+          python3 -m py_compile scripts/generate-multibond-config.py scripts/sync-yandex-channels.py scripts/test-channel-sync.py
+          python3 scripts/test-channel-sync.py
           tmpdir="$(mktemp -d)"
           python3 scripts/generate-multibond-config.py --role=client --channels=examples/channels.example.csv --out="$tmpdir/client.conf" --bond-max=256 --bond-active=6
           python3 scripts/generate-multibond-config.py --role=exit --channels=examples/channels.example.csv --out="$tmpdir/exit.conf" --bond-max=256 --bond-active=6
-          test "$(grep -c '^\\[Transport ' "$tmpdir/client.conf")" -eq 6
-          test "$(grep -c '^\\[Transport ' "$tmpdir/exit.conf")" -eq 6
+          test "$(grep -c '^\[Transport ' "$tmpdir/client.conf")" -eq 6
+          test "$(grep -c '^\[Transport ' "$tmpdir/exit.conf")" -eq 6
           rm -rf "$tmpdir"
       - name: Local MultiBond end-to-end
         run: bash scripts/multibond-e2e-local.sh
