@@ -696,6 +696,7 @@ func (s *Session) Send(p []byte) error {
 		utils.Debugf("[SESSION] send IPv4 #%d seq=%d via %q size=%d proto=%d", n, seq, chosen.name, len(p), p[9])
 	}
 	err = chosen.batched.Send(raw)
+	s.bondObserveSendResult(chosen.name, err)
 	if err == nil {
 		s.bondObserveBytes(chosen.name, len(raw))
 	}
@@ -1055,6 +1056,7 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 	cb := s.dataCallback
 	s.mu.Unlock()
 	n := s.cntDataRecv.Add(1)
+	s.bondObserveBytes(link.name, len(payload))
 	if n == 1 || n%100 == 0 {
 		utils.Debugf("[SESSION] recv IPv4 #%d seq=%d from %q size=%d proto=%d",
 			n, env.Data.Sequence, link.name, len(payload), payload[9])
