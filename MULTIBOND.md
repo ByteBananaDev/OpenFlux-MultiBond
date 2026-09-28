@@ -195,6 +195,47 @@ python3 scripts/generate-multibond-config.py \
   --mode l3
 ```
 
+## Yandex Table / Disk inventory
+
+The channel inventory can be maintained as a CSV/XLSX table and synchronized
+before generating OpenFlux configs.
+
+Supported sources:
+
+- local CSV or XLSX;
+- a direct HTTP(S) CSV/XLSX URL;
+- a public Yandex Disk link with downloading enabled.
+
+The first XLSX worksheet is used. Required columns are `name` and `type`.
+The normalized inventory columns are:
+
+```text
+name,type,priority,url,dial,listen,token,uid,enabled
+```
+
+Rows with `enabled=0`, `false`, `no`, `off` or `disabled` are skipped by
+the config generator. This lets channels be disabled in the table without
+deleting them.
+
+Example:
+
+```bash
+python3 scripts/sync-yandex-channels.py \
+  --source 'YOUR_PUBLIC_YANDEX_DISK_OR_TABLE_LINK' \
+  --out channels.csv
+
+python3 scripts/generate-multibond-config.py \
+  --role client --channels channels.csv --out client.conf \
+  --bond-max 256 --bond-active 196
+
+python3 scripts/generate-multibond-config.py \
+  --role exit --channels channels.csv --out exit.conf \
+  --bond-max 256 --bond-active 196 --mode l3
+```
+
+The sync writes `channels.csv` atomically, so a failed download or parse does
+not replace the last good inventory.
+
 ## Linux exit service
 
 After a successful smoke test:
