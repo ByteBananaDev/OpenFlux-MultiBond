@@ -41,9 +41,9 @@ type Channel struct {
 	Reconnects uint64
 	Score      float64
 
-	overLimitSince  time.Time
-	underLimitSince time.Time
-	pingSent        time.Time
+	overLimitSince time.Time
+	recoverySince  time.Time
+	pingSent       time.Time
 	rateWindowStart time.Time
 	rateWindowBytes uint64
 }
@@ -106,7 +106,7 @@ func (s *Scheduler) SetConnected(name string, connected bool) {
 	if !connected {
 		c.State = StateFailed
 		c.overLimitSince = time.Time{}
-		c.underLimitSince = time.Time{}
+		c.recoverySince = time.Time{}
 	} else if c.State == StateFailed {
 		c.State = StateReserve
 	}
@@ -138,18 +138,7 @@ func (s *Scheduler) NotePong(name string) {
 		c.RTT = ewmaDuration(c.RTT, sample, s.cfg.RTTAlpha)
 	}
 	c.RTTSamples++
-	now := s.now()
-	if c.RTT > s.cfg.MaxRTT {
-		c.underLimitSince = time.Time{}
-		if c.overLimitSince.IsZero() {
-			c.overLimitSince = now
-		}
-	} else {
-		c.overLimitSince = time.Time{}
-		if c.underLimitSince.IsZero() {
-			c.underLimitSince = now
-		}
-	}
+	s.updateRTTStateLocked(c)
 	s.mu.Unlock()
 }
 
@@ -192,18 +181,7 @@ func (s *Scheduler) ObserveRTT(name string, sample time.Duration) {
 		c.RTT = ewmaDuration(c.RTT, sample, s.cfg.RTTAlpha)
 	}
 	c.RTTSamples++
-	now := s.now()
-	if c.RTT > s.cfg.MaxRTT {
-		c.underLimitSince = time.Time{}
-		if c.overLimitSince.IsZero() {
-			c.overLimitSince = now
-		}
-	} else {
-		c.overLimitSince = time.Time{}
-		if c.underLimitSince.IsZero() {
-			c.underLimitSince = now
-		}
-	}
+	s.updateRTTStateLocked(c)
 }
 
 func (s *Scheduler) ObserveThroughput(name string, bytesPerSecond float64) {
@@ -307,10 +285,33 @@ func normalEligible(c *Channel, cfg Config, now time.Time) bool {
 	if c.RTT > cfg.MaxRTT {
 		return c.overLimitSince.IsZero() || now.Sub(c.overLimitSince) < cfg.BadRTTHold
 	}
-	if !c.underLimitSince.IsZero() && cfg.RecoveryHold > 0 && c.State == StateReserve {
-		return now.Sub(c.underLimitSince) >= cfg.RecoveryHold
+	// Recovery hold applies only after a channel actually spent BadRTTHold
+	// above MaxRTT. Ordinary reserve channels are immediately eligible.
+	if !c.recoverySince.IsZero() && cfg.RecoveryHold > 0 {
+		if now.Sub(c.recoverySince) < cfg.RecoveryHold {
+			return false
+		}
+		c.recoverySince = time.Time{}
 	}
 	return true
+}
+
+func (s *Scheduler) updateRTTStateLocked(c *Channel) {
+	now := s.now()
+	if c.RTT > s.cfg.MaxRTT {
+		c.recoverySince = time.Time{}
+		if c.overLimitSince.IsZero() {
+			c.overLimitSince = now
+		}
+		return
+	}
+
+	if !c.overLimitSince.IsZero() {
+		if now.Sub(c.overLimitSince) >= s.cfg.BadRTTHold {
+			c.recoverySince = now
+		}
+		c.overLimitSince = time.Time{}
+	}
 }
 
 func scoreChannel(c *Channel, cfg Config, maxThroughput float64) float64 {
