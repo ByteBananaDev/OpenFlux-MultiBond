@@ -40,6 +40,25 @@ def main():
         rows = mod.parse_inventory(data, hint)
         assert len(rows) == 2 and rows[0]["name"] == "volga-01"
 
+        # Exercise the Yandex public-link resolver without external network.
+        real_http_get = mod.http_get
+        calls = []
+        def fake_http_get(url):
+            calls.append(url)
+            if url.startswith("https://cloud-api.yandex.net/v1/disk/public/resources/download?"):
+                return b'{"href":"https://download.invalid/channels.csv"}', "application/json"
+            if url == "https://download.invalid/channels.csv":
+                return csv_path.read_bytes(), "text/csv"
+            raise AssertionError(url)
+        mod.http_get = fake_http_get
+        try:
+            data, hint = mod.fetch_source("https://disk.yandex.ru/i/test-public-key")
+            rows = mod.parse_inventory(data, hint)
+            assert rows[0]["name"] == "volga-01"
+            assert len(calls) == 2 and "public_key=" in calls[0]
+        finally:
+            mod.http_get = real_http_get
+
         xlsx_path = td / "channels.xlsx"
         make_xlsx(xlsx_path)
         data, hint = mod.fetch_source(str(xlsx_path))
