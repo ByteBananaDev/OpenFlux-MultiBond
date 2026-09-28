@@ -194,6 +194,10 @@ func (s *Session) bondProbe(limit int) {
 	}
 
 	s.mu.Lock()
+	if !s.ready || s.stopped {
+		s.mu.Unlock()
+		return
+	}
 	live := s.liveLinksLocked()
 	s.mu.Unlock()
 	if len(live) == 0 {
