@@ -506,6 +506,7 @@ func (s *Session) Stop() error {
 		}
 	})
 	s.wg.Wait()
+	s.stopBond()
 	return nil
 }
 
