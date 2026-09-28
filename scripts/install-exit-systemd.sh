@@ -37,18 +37,10 @@ go build -trimpath -o openflux .
 echo "== installing =="
 install -m 0755 openflux /usr/local/bin/openflux-multibond
 install -d -m 0700 /etc/openflux-multibond
+install -d -m 0700 /var/lib/openflux-multibond
 install -m 0600 "$CONFIG_SRC" /etc/openflux-multibond/exit.conf
-install -m 0600 "$SECRET_SRC" /etc/openflux-multibond/secret.txt
-
-# Config files generally refer to secret.txt relative to their own deployment
-# directory. Make the service use /etc/openflux-multibond as its working dir.
-install -d -m 0755 /var/lib/openflux-multibond
+install -m 0600 "$SECRET_SRC" /var/lib/openflux-multibond/secret.txt
 install -m 0644 systemd/openflux-multibond.service /etc/systemd/system/openflux-multibond.service
-
-# Ensure the service starts where secret.txt and cookie files resolve.
-if ! grep -q '^WorkingDirectory=' /etc/systemd/system/openflux-multibond.service; then
-  sed -i '/^Group=root/a WorkingDirectory=/etc/openflux-multibond' /etc/systemd/system/openflux-multibond.service
-fi
 
 systemctl daemon-reload
 systemctl enable openflux-multibond.service
@@ -57,7 +49,7 @@ echo
 echo "Installed:"
 echo "  binary: /usr/local/bin/openflux-multibond"
 echo "  config: /etc/openflux-multibond/exit.conf"
-echo "  secret: /etc/openflux-multibond/secret.txt"
+echo "  secret: /var/lib/openflux-multibond/secret.txt"
 echo "  unit:   openflux-multibond.service"
 
 if [[ "$START" == "--start" ]]; then
