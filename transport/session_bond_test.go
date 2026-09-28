@@ -128,3 +128,67 @@ func TestSessionBondPinsExistingFlow(t *testing.T) {
 		t.Fatalf("flow moved from %s to %s after score change", first.name, second.name)
 	}
 }
+
+
+func TestSessionBondRepinsWhenCarrierDemoted(t *testing.T) {
+	params := PeerParameters{
+		Capabilities:  control.CapabilityIPv4 | control.CapabilityTCP,
+		MaxPacketSize: 1500,
+	}
+	s, err := NewSession(params, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Stop() })
+
+	a := &negotiationWire{}
+	b := &negotiationWire{}
+	if err := s.AddTransport("a", a, testSessionSecret, testSessionCtx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddTransport("b", b, testSessionSecret, testSessionCtx, 50); err != nil {
+		t.Fatal(err)
+	}
+	cfg := bond.DefaultConfig()
+	cfg.TargetActive = 2
+	cfg.MinActive = 1
+	cfg.BadRTTHold = 0
+	cfg.RecoveryHold = 0
+	cfg.EmergencyMaxRTT = 180 * time.Millisecond
+	if err := s.EnableBond(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	st := s.bondState()
+	for _, name := range []string{"a", "b"} {
+		st.scheduler.SetConnected(name, true)
+		for i := 0; i < 4; i++ {
+			st.scheduler.ObserveRTT(name, 60*time.Millisecond)
+		}
+		st.scheduler.ObserveThroughput(name, 100_000)
+	}
+	st.scheduler.Rebalance()
+
+	live := []*transportLink{s.links["a"], s.links["b"]}
+	first := s.bondPickFlow(0xabcddcba, live)
+	if first == nil {
+		t.Fatal("first selection returned nil")
+	}
+
+	// Force the pinned carrier beyond the emergency ceiling so it leaves ACTIVE.
+	for i := 0; i < 8; i++ {
+		st.scheduler.ObserveRTT(first.name, 250*time.Millisecond)
+	}
+	st.scheduler.Rebalance()
+	if st.scheduler.IsActive(first.name) {
+		t.Fatalf("bad carrier %s remained active", first.name)
+	}
+
+	second := s.bondPickFlow(0xabcddcba, live)
+	if second == nil {
+		t.Fatal("repin selection returned nil")
+	}
+	if second.name == first.name {
+		t.Fatalf("flow remained pinned to demoted carrier %s", first.name)
+	}
+}
