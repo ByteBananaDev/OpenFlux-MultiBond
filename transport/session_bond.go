@@ -133,14 +133,18 @@ func (s *Session) bondPickFlow(flowHash uint64, live []*transportLink) *transpor
 	now := time.Now()
 	st.mu.Lock()
 	if pin, ok := st.flows[flowHash]; ok {
-		for _, l := range live {
-			if l.name == pin.channel {
-				pin.lastUsed = now
-				st.flows[flowHash] = pin
-				st.mu.Unlock()
-				return l
+		if st.scheduler.IsActive(pin.channel) {
+			for _, l := range live {
+				if l.name == pin.channel {
+					pin.lastUsed = now
+					st.flows[flowHash] = pin
+					st.mu.Unlock()
+					return l
+				}
 			}
 		}
+		// Failed or demoted carriers are not allowed to keep a flow pinned.
+		// The next selection below moves it to the current active pool.
 		delete(st.flows, flowHash)
 	}
 	st.mu.Unlock()
