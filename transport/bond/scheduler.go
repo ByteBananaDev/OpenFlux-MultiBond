@@ -117,7 +117,11 @@ func (s *Scheduler) SetConnected(name string, connected bool) {
 func (s *Scheduler) NotePingSent(name string) {
 	s.mu.Lock()
 	c := s.ensureLocked(name)
-	c.pingSent = s.now()
+	// There is no ping ID on the wire. Keep the oldest outstanding timestamp
+	// so overlapping keepalive/probe pings cannot corrupt the RTT sample.
+	if c.pingSent.IsZero() {
+		c.pingSent = s.now()
+	}
 	s.mu.Unlock()
 }
 
