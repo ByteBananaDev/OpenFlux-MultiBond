@@ -36,9 +36,11 @@ type Channel struct {
 	State      State
 	RTT        time.Duration
 	RTTSamples int
-	Throughput float64
-	Loss       float64
-	Reconnects uint64
+	Throughput        float64
+	ThroughputSamples int
+	Loss              float64
+	LossSamples       int
+	Reconnects        uint64
 	Score      float64
 
 	overLimitSince time.Time
@@ -159,11 +161,12 @@ func (s *Scheduler) ObserveBytes(name string, n int) {
 		return
 	}
 	rate := float64(c.rateWindowBytes) / elapsed.Seconds()
-	if c.Throughput == 0 {
+	if c.ThroughputSamples == 0 {
 		c.Throughput = rate
 	} else {
 		c.Throughput = ewma(c.Throughput, rate, s.cfg.ThroughputAlpha)
 	}
+	c.ThroughputSamples++
 	c.rateWindowBytes = 0
 	c.rateWindowStart = now
 }
@@ -191,11 +194,12 @@ func (s *Scheduler) ObserveThroughput(name string, bytesPerSecond float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.ensureLocked(name)
-	if c.Throughput == 0 {
+	if c.ThroughputSamples == 0 {
 		c.Throughput = bytesPerSecond
 	} else {
 		c.Throughput = ewma(c.Throughput, bytesPerSecond, s.cfg.ThroughputAlpha)
 	}
+	c.ThroughputSamples++
 }
 
 func (s *Scheduler) ObserveLoss(name string, loss float64) {
@@ -203,11 +207,12 @@ func (s *Scheduler) ObserveLoss(name string, loss float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.ensureLocked(name)
-	if c.Loss == 0 {
+	if c.LossSamples == 0 {
 		c.Loss = loss
 	} else {
 		c.Loss = ewma(c.Loss, loss, s.cfg.LossAlpha)
 	}
+	c.LossSamples++
 }
 
 func (s *Scheduler) SetReconnects(name string, reconnects uint64) {
@@ -250,12 +255,67 @@ func (s *Scheduler) Rebalance() Snapshot {
 	sortChannels(eligible)
 	sortChannels(emergency)
 	selected := make(map[string]bool, s.cfg.TargetActive)
+
+	// Preserve currently active healthy channels first. This is the main
+	// anti-flap hysteresis: a reserve carrier does not replace an active one
+	// merely because its score is fractionally better on one refresh.
+	current := make([]*Channel, 0, s.cfg.TargetActive)
 	for _, c := range eligible {
+		if c.State == StateActive {
+			current = append(current, c)
+		}
+	}
+	sortChannels(current)
+	for _, c := range current {
 		if len(selected) >= s.cfg.TargetActive {
 			break
 		}
 		selected[c.Name] = true
 	}
+
+	// Fill vacant active slots immediately from the best healthy reserves.
+	for _, c := range eligible {
+		if len(selected) >= s.cfg.TargetActive {
+			break
+		}
+		if !selected[c.Name] {
+			selected[c.Name] = true
+		}
+	}
+
+	// If the pool is already full, allow a reserve to replace the worst
+	// active carrier only when it beats it by PromoteMargin (10% default).
+	for {
+		var worstActive *Channel
+		for _, c := range eligible {
+			if !selected[c.Name] {
+				continue
+			}
+			if worstActive == nil || c.Score < worstActive.Score {
+				worstActive = c
+			}
+		}
+		var bestReserve *Channel
+		for _, c := range eligible {
+			if selected[c.Name] {
+				continue
+			}
+			if bestReserve == nil || c.Score > bestReserve.Score {
+				bestReserve = c
+			}
+		}
+		if worstActive == nil || bestReserve == nil {
+			break
+		}
+		threshold := worstActive.Score * (1 + s.cfg.PromoteMargin)
+		if bestReserve.Score <= threshold {
+			break
+		}
+		delete(selected, worstActive.Name)
+		selected[bestReserve.Name] = true
+	}
+
+	// Emergency carriers are only used to maintain MinActive.
 	for _, c := range emergency {
 		if len(selected) >= s.cfg.MinActive || len(selected) >= s.cfg.TargetActive {
 			break
