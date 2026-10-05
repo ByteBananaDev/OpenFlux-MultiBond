@@ -338,6 +338,11 @@ MULTIBOND  (adaptive session routing)
                                Default: 30ms.
                                RTT is averaged; one spike does not demote a
                                channel. Throughput has more weight than RTT.
+      --channel-inventory=FILE Client: normalized channel CSV to hot-reload.
+                               Existing bootstrap transports stay as anchors
+                               unless they are explicitly present in FILE.
+      --channel-inventory-interval=D
+                               Poll FILE for changes. Default: 5s.
 
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
