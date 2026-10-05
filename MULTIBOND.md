@@ -271,3 +271,87 @@ bash scripts/multibond-smoke.sh
 
 This runs scheduler/session tests, the full Go test suite, `go vet`, a native
 build and Linux/macOS/Windows cross-builds.
+
+
+## Live Yandex inventory hot reload
+
+A client can now treat the normalized channel inventory as the runtime source of
+truth without restarting OpenFlux. The client owns reconciliation and sends
+encrypted `TransportStart` / `TransportStop` control messages to the exit,
+so the exit does not need to poll Yandex separately.
+
+Data path:
+
+```text
+Yandex Disk / public table / CSV / XLSX
+        |
+        | sync-yandex-channels.py --interval 15
+        v
+normalized channels.csv
+        |
+        | --channel-inventory + 5s poll
+        v
+client inventory reconciler
+        |
+        +-- unchanged -> no action
+        +-- added     -> local runtime start + peer TransportStart
+        +-- removed   -> peer TransportStop + local runtime stop
+        +-- changed   -> safe stop/recreate on both peers
+        |
+        v
+MultiBond ACTIVE / RESERVE / FAILED
+```
+
+Start the Yandex/source watcher:
+
+```bash
+python3 scripts/sync-yandex-channels.py \
+  --source 'YOUR_PUBLIC_YANDEX_DISK_OR_TABLE_LINK' \
+  --out channels.csv \
+  --interval 15
+```
+
+Start the client with a bootstrap carrier plus hot reload:
+
+```bash
+./openflux \
+  --config client.conf \
+  --channel-inventory channels.csv \
+  --channel-inventory-interval 5s
+```
+
+The bootstrap carrier is important: it gives the client a stable encrypted
+control path while inventory-managed carriers are added or replaced. A
+bootstrap transport that is not listed in the inventory is never removed by
+the reconciler.
+
+Safety properties:
+
+- a download or parse failure never replaces the last known-good CSV;
+- identical source content is not rewritten;
+- disabled rows are removed from the managed pool;
+- a changed row (URL, priority, direct endpoint, token/UID or type) is replaced
+  at runtime;
+- the reconciler refuses to remove or replace the last currently-live carrier;
+- direct rows must provide both `dial` (client side) and `listen` (exit side);
+- the exit receives lifecycle changes through the authenticated encrypted
+  Session control channel.
+
+The inventory remains:
+
+```text
+name,type,priority,url,dial,listen,token,uid,enabled
+```
+
+Example:
+
+```csv
+name,type,priority,url,dial,listen,token,uid,enabled
+volga-01,vyandex,70,https://example.invalid/doc-1,,,,,1
+boards-01,boards,60,https://example.invalid/board-1,,,,,1
+direct-backup,direct,100,,203.0.113.10:18445,0.0.0.0:18445,,,1
+```
+
+For a direct row, the same inventory line creates a client-side dialer from
+`dial` and an exit-side listener from `listen`. Other document transports
+use the same URL on both peers.
