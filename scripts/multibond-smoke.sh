@@ -13,7 +13,7 @@ if [[ -n "$bad" ]]; then
 fi
 
 echo "== script/config tooling =="
-bash -n scripts/multibond-smoke.sh scripts/multibond-e2e-local.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
+bash -n scripts/multibond-smoke.sh scripts/multibond-e2e-local.sh scripts/multibond-live-watch.sh scripts/install-exit-systemd.sh scripts/multibond-doctor.sh
 python3 -m py_compile scripts/generate-multibond-config.py scripts/sync-yandex-channels.py scripts/test-channel-sync.py
 python3 scripts/test-channel-sync.py
 
