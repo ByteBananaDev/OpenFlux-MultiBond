@@ -207,3 +207,61 @@ func TestManagerDispatchControlForwardsUnknownSubtypes(t *testing.T) {
 		t.Fatal("callback not invoked")
 	}
 }
+
+
+func TestManagerStartTransportAfterSessionStart(t *testing.T) {
+	sess, err := transport.NewSession(transport.PeerParameters{
+		Capabilities:  control.CapabilityIPv4 | control.CapabilityTCP,
+		MaxPacketSize: 1500,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Stop() })
+
+	factory := func(cfg *control.TransportConfig) (transport.Transport, error) {
+		return &fakeTransport{}, nil
+	}
+	m := New(sess, factory, "test-secret-long-enough", "test-ctx")
+
+	bootstrap := &fakeTransport{}
+	if err := sess.AddTransport("bootstrap", bootstrap, "test-secret-long-enough", "test-ctx", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Add("bootstrap", "fake", bootstrap, 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &control.TransportConfig{
+		Name: "dynamic",
+		Type: "fake",
+		Params: map[string]interface{}{
+			"priority": 75,
+		},
+	}
+	if err := m.StartTransport(cfg); err != nil {
+		t.Fatalf("runtime start: %v", err)
+	}
+	if !m.HasTransport("dynamic") {
+		t.Fatal("dynamic transport missing from manager")
+	}
+	found := false
+	for _, name := range sess.Transports() {
+		if name == "dynamic" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("dynamic transport missing from session")
+	}
+
+	if err := m.Remove("dynamic"); err != nil {
+		t.Fatalf("runtime remove: %v", err)
+	}
+	if m.HasTransport("dynamic") {
+		t.Fatal("dynamic transport still attached after remove")
+	}
+}
