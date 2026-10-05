@@ -98,9 +98,53 @@ Priority = 50
 Dial = 127.0.0.1:18446
 EOF
 
-echo "== local target HTTP server =="
-python3 -m http.server 18080 --bind 127.0.0.1 --directory "$TMP/www" >"$TMP/http.log" 2>&1 &
+TARGET_IP="${OPENFLUX_E2E_TARGET_IP:-}"
+if [[ -z "$TARGET_IP" ]]; then
+  TARGET_IP="$(python3 - <<'PY'
+import socket
+
+# UDP connect performs only a route lookup here; it does not need the remote
+# address to answer. We need a host-owned non-loopback IPv4 because gVisor
+# deliberately does not treat 127/8 arriving on the tunnel NIC as forwarded
+# Internet traffic.
+for remote in (("192.0.2.1", 9), ("198.51.100.1", 9), ("8.8.8.8", 53)):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(remote)
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = ""
+    finally:
+        s.close()
+    if ip and not ip.startswith("127."):
+        print(ip)
+        break
+else:
+    raise SystemExit("could not determine a non-loopback IPv4 for local E2E")
+PY
+)"
+fi
+
+echo "== local target HTTP server ($TARGET_IP:18080) =="
+python3 -m http.server 18080 --bind 0.0.0.0 --directory "$TMP/www" >"$TMP/http.log" 2>&1 &
 HTTP_PID=$!
+
+# Verify the target independently before involving OpenFlux. This makes a
+# host/firewall problem distinct from a tunnel problem.
+target_ok=0
+for _ in $(seq 1 20); do
+  direct="$(env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy     curl --silent --show-error --max-time 2 --noproxy "*"     "http://$TARGET_IP:18080/token.txt" 2>/dev/null || true)"
+  if [[ "$direct" == "$TOKEN" ]]; then
+    target_ok=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$target_ok" != "1" ]]; then
+  echo "local E2E target is not reachable directly at $TARGET_IP:18080" >&2
+  cat "$TMP/http.log" >&2 || true
+  exit 1
+fi
 
 echo "== exit =="
 "$BIN" --config="$TMP/exit.conf" >"$TMP/exit.log" 2>&1 &
@@ -116,7 +160,7 @@ CLIENT_PID=$!
 echo "== tunnel request =="
 result=""
 for _ in $(seq 1 40); do
-  result="$(env -u NO_PROXY -u no_proxy curl --silent --show-error --max-time 2     --noproxy "" --socks5-hostname 127.0.0.1:11080     http://127.0.0.1:18080/token.txt 2>/dev/null || true)"
+  result="$(env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u NO_PROXY -u no_proxy     curl --silent --show-error --max-time 2     --proxy socks5h://127.0.0.1:11080     "http://$TARGET_IP:18080/token.txt" 2>/dev/null || true)"
   if [[ "$result" == "$TOKEN" ]]; then
     break
   fi
