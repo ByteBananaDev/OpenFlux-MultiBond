@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import sys
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -138,17 +140,29 @@ def parse_inventory(data: bytes, hint: str):
         raise ValueError("inventory contains no channel rows")
     return out
 
-def write_csv_atomic(path: Path, rows) -> None:
+def write_csv_atomic(path: Path, rows) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    buf = io.StringIO(newline="")
+    w = csv.DictWriter(buf, fieldnames=CANONICAL)
+    w.writeheader()
+    w.writerows(rows)
+    encoded = buf.getvalue().encode("utf-8")
+
+    try:
+        if path.read_bytes() == encoded:
+            return False
+    except FileNotFoundError:
+        pass
+
     fd, tmpname = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CANONICAL)
-            w.writeheader()
-            w.writerows(rows)
+        with os.fdopen(fd, "wb") as f:
+            f.write(encoded)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmpname, path)
+        return True
     except Exception:
         try:
             os.unlink(tmpname)
@@ -160,14 +174,45 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Sync MultiBond channel inventory from Yandex Disk/Table, URL, CSV or XLSX")
     p.add_argument("--source", required=True, help="local CSV/XLSX, direct URL, or public Yandex Disk link")
     p.add_argument("--out", default="channels.csv")
+    p.add_argument(
+        "--interval",
+        type=float,
+        default=0,
+        help="watch continuously and re-sync every N seconds; 0 = one-shot",
+    )
     args = p.parse_args()
-    data, hint = fetch_source(args.source)
-    rows = parse_inventory(data, hint)
-    write_csv_atomic(Path(args.out), rows)
+    if args.interval < 0:
+        p.error("--interval must be >= 0")
+
+    out = Path(args.out)
     disabled = {"0", "false", "no", "off", "disabled"}
-    enabled = sum(1 for r in rows if r.get("enabled", "").strip().lower() not in disabled)
-    print(f"wrote {args.out}: {len(rows)} rows, {enabled} enabled")
-    return 0
+
+    def sync_once():
+        data, hint = fetch_source(args.source)
+        rows = parse_inventory(data, hint)
+        changed = write_csv_atomic(out, rows)
+        enabled = sum(1 for r in rows if r.get("enabled", "").strip().lower() not in disabled)
+        state = "updated" if changed else "unchanged"
+        print(f"{state} {args.out}: {len(rows)} rows, {enabled} enabled", flush=True)
+
+    if args.interval == 0:
+        sync_once()
+        return 0
+
+    delay = max(args.interval, 1.0)
+    print(f"watching inventory every {delay:g}s: {args.source}", flush=True)
+    while True:
+        try:
+            sync_once()
+        except KeyboardInterrupt:
+            return 0
+        except Exception as exc:
+            # Never replace the last known-good CSV on a download/parse error.
+            print(f"sync error: {exc}", file=sys.stderr, flush=True)
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
