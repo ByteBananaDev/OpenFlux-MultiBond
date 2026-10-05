@@ -442,6 +442,11 @@ func (m *Manager) HasTransport(name string) bool {
 	return ok
 }
 
+// LiveTransports returns carriers that currently reach the authenticated peer.
+func (m *Manager) LiveTransports() []string {
+	return m.session.LiveTransports()
+}
+
 func (m *Manager) startTransport(cfg *control.TransportConfig) error {
 	if cfg == nil || cfg.Name == "" {
 		return errors.New("manager: empty config")
