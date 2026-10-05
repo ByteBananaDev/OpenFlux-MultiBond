@@ -30,22 +30,22 @@ func (s State) String() string {
 }
 
 type Channel struct {
-	Name       string
-	Kind       string
-	Connected  bool
-	State      State
-	RTT        time.Duration
-	RTTSamples int
+	Name              string
+	Kind              string
+	Connected         bool
+	State             State
+	RTT               time.Duration
+	RTTSamples        int
 	Throughput        float64
 	ThroughputSamples int
 	Loss              float64
 	LossSamples       int
 	Reconnects        uint64
-	Score      float64
+	Score             float64
 
-	overLimitSince time.Time
-	recoverySince  time.Time
-	pingSent       time.Time
+	overLimitSince  time.Time
+	recoverySince   time.Time
+	pingSent        time.Time
 	rateWindowStart time.Time
 	rateWindowBytes uint64
 }
