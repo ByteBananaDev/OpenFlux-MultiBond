@@ -66,7 +66,8 @@ def main():
         assert len(rows) == 2 and rows[1]["enabled"] == "0"
 
         out = td / "normalized.csv"
-        mod.write_csv_atomic(out, rows)
+        assert mod.write_csv_atomic(out, rows) is True
+        assert mod.write_csv_atomic(out, rows) is False
         with out.open(newline="", encoding="utf-8") as f:
             parsed = list(csv.DictReader(f))
         assert parsed[0]["type"] == "vyandex"
