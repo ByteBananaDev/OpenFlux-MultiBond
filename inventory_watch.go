@@ -159,12 +159,20 @@ func parseChannelInventory(data []byte) ([]channelInventoryRow, error) {
 // channelInventoryReconciler owns only channels present in the inventory.
 // Bootstrap transports that are not listed are deliberately left alone so
 // the control session always has an out-of-band anchor for hot reloads.
+type channelInventoryManager interface {
+	Transports() []string
+	LiveTransports() []string
+	StartTransport(*control.TransportConfig) error
+	Remove(string) error
+	SendControl(control.Subtype, []byte) error
+}
+
 type channelInventoryReconciler struct {
-	manager *manager.Manager
+	manager channelInventoryManager
 	managed map[string]channelInventoryRow
 }
 
-func newChannelInventoryReconciler(m *manager.Manager) *channelInventoryReconciler {
+func newChannelInventoryReconciler(m channelInventoryManager) *channelInventoryReconciler {
 	return &channelInventoryReconciler{
 		manager: m,
 		managed: make(map[string]channelInventoryRow),
@@ -240,7 +248,7 @@ func (r *channelInventoryReconciler) apply(rows []channelInventoryRow) error {
 }
 
 func (r *channelInventoryReconciler) canRemove(name string) bool {
-	live := r.manager.Session().LiveTransports()
+	live := r.manager.LiveTransports()
 	for _, n := range live {
 		if n == name {
 			return len(live) > 1
