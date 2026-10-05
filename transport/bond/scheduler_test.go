@@ -172,7 +172,6 @@ func TestObserveBytesBuildsThroughput(t *testing.T) {
 	}
 }
 
-
 func TestHealthyReserveDoesNotWaitRecoveryHold(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.TargetActive = 3
@@ -191,7 +190,6 @@ func TestHealthyReserveDoesNotWaitRecoveryHold(t *testing.T) {
 		t.Fatalf("healthy reserve channels should activate immediately, got %d", len(snap.Active))
 	}
 }
-
 
 func TestPromotionMarginPreventsFlap(t *testing.T) {
 	cfg := DefaultConfig()
