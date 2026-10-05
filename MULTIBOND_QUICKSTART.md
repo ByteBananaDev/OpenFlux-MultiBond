@@ -132,6 +132,15 @@ The returned address should be the exit node's public address.
 Watch the OpenFlux logs. MultiBond should keep both direct carriers in the
 active pool and periodically update their RTT.
 
+For a continuous traffic check, open another terminal on the client:
+
+```bash
+bash scripts/multibond-live-watch.sh 127.0.0.1:1080 https://api.ipify.org 120 1
+```
+
+The watcher sends 120 requests one second apart and prints a final
+`SUMMARY ok=... fail=...`. Keep it running during the failover test below.
+
 ## 6. Failover test
 
 Temporarily block one carrier on the exit:
@@ -141,7 +150,8 @@ sudo iptables -I INPUT 1 -p tcp --dport 8445 -j DROP
 ```
 
 Continue sending requests through SOCKS5. After liveness detection, the pool
-should fall back to `direct-02`.
+should fall back to `direct-02`. The live watcher should continue reporting
+successful requests; any failed requests are counted in its final summary.
 
 Remove the temporary rule:
 
