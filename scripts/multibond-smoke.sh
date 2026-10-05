@@ -5,7 +5,7 @@ echo "== OpenFlux MultiBond smoke =="
 echo "Go: $(go version)"
 
 echo "== gofmt check =="
-bad="$(gofmt -l transport/bond transport/session_bond.go transport/session_bond_test.go)"
+bad="$(gofmt -l transport/bond transport/session_bond.go transport/session_bond_test.go transport/manager/manager.go transport/manager/manager_test.go inventory_watch.go inventory_watch_test.go transport_factory.go main.go)"
 if [[ -n "$bad" ]]; then
   echo "Files needing gofmt:"
   echo "$bad"
