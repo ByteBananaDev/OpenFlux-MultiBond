@@ -993,6 +993,10 @@ DEPRECATED (removed in v2)
 		log.Fatalf("Failed to start transport: %v", err)
 	}
 
+	if managerInst != nil {
+		startConfiguredChannelInventory(managerInst, *role)
+	}
+
 	if statusServer != nil && managerInst != nil {
 		utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst) })
 	}
