@@ -184,9 +184,9 @@ func (s *Session) AddTransport(name string, raw Transport, secret, context strin
 
 func (s *Session) RemoveTransport(name string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	link, ok := s.links[name]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("session: transport %q not found", name)
 	}
 	delete(s.links, name)
@@ -196,6 +196,10 @@ func (s *Session) RemoveTransport(name string) error {
 			break
 		}
 	}
+	s.mu.Unlock()
+
+	// Stop outside s.mu: transport shutdown can wait on I/O and must not
+	// block the Session's send/receive/keepalive paths while it drains.
 	_ = link.batched.Stop()
 	s.bondRemove(name)
 	return nil
