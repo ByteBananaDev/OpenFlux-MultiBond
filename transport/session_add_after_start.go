@@ -64,6 +64,21 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 	s.order = insertByPriority(s.order, name, priority, s.links)
 	s.mu.Unlock()
 
+	if err := s.bondRegister(name, fmt.Sprintf("%T", raw)); err != nil {
+		s.mu.Lock()
+		delete(s.links, name)
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+		_ = bat.Stop()
+		return fmt.Errorf("session: bond register %q: %w", name, err)
+	}
+	s.bondSetConnected(name, true)
+
 	utils.Debugf("[SESSION] transport %q added post-start (priority=%d)", name, priority)
 	return nil
 }

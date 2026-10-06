@@ -15,6 +15,7 @@ import (
 	"openflux/netbind"
 	"openflux/socks5"
 	"openflux/transport"
+	"openflux/transport/bond"
 	"openflux/transport/control"
 	"openflux/transport/cupsonline"
 	"openflux/transport/ipc"
@@ -239,6 +240,16 @@ func main() {
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
+
+	bondEnabled := flag.Bool("bond", false, "Enable adaptive MultiBond scheduling across session transports")
+	bondMaxChannels := flag.Int("bond-max", 256, "MultiBond maximum physical channels (1..256)")
+	bondTargetActive := flag.Int("bond-active", 196, "MultiBond target number of active channels")
+	bondMinActive := flag.Int("bond-min-active", 4, "MultiBond minimum emergency active channels")
+	bondPreferredRTT := flag.Duration("bond-preferred-rtt", 120*time.Millisecond, "MultiBond preferred averaged RTT")
+	bondMaxRTT := flag.Duration("bond-max-rtt", 150*time.Millisecond, "MultiBond normal RTT ceiling")
+	bondEmergencyRTT := flag.Duration("bond-emergency-rtt", 300*time.Millisecond, "MultiBond emergency RTT ceiling")
+	bondRTTSpread := flag.Duration("bond-rtt-spread", 30*time.Millisecond, "Maximum RTT spread for future striped groups")
+
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -313,6 +324,25 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --oneme-uid=<uid>        MAX user id for the oneme transport.
       --direct-dial=<addr>     DirectTransport: exit host:port (client).
       --direct-listen=<addr>   DirectTransport: listen addr on exit.
+
+MULTIBOND  (adaptive session routing)
+      --bond                   Enable adaptive MultiBond scheduling.
+      --bond-max=N             Maximum physical channels, up to 256.
+                               Default: 256.
+      --bond-active=N          Target active channels. Default: 196.
+      --bond-min-active=N      Emergency minimum active channels. Default: 4.
+      --bond-preferred-rtt=D   Preferred averaged RTT. Default: 120ms.
+      --bond-max-rtt=D         Normal RTT ceiling. Default: 150ms.
+      --bond-emergency-rtt=D   Emergency-only RTT ceiling. Default: 300ms.
+      --bond-rtt-spread=D      Maximum RTT spread for future striped groups.
+                               Default: 30ms.
+                               RTT is averaged; one spike does not demote a
+                               channel. Throughput has more weight than RTT.
+      --channel-inventory=FILE Client: normalized channel CSV to hot-reload.
+                               Existing bootstrap transports stay as anchors
+                               unless they are explicitly present in FILE.
+      --channel-inventory-interval=D
+                               Poll FILE for changes. Default: 5s.
 
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
@@ -421,6 +451,35 @@ DEPRECATED (removed in v2)
 		applyConfString(conf.Interface, "CookieStore", "cookie-store", cookieStorePath, setFlags)
 		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
 		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
+
+		if v, ok := confValue(conf.Interface, "Bond"); ok && !setFlags["bond"] {
+			*bondEnabled = confBool(v, *bondEnabled)
+		}
+		if v, ok := confValue(conf.Interface, "BondMax"); ok && !setFlags["bond-max"] {
+			*bondMaxChannels = confInt(v, *bondMaxChannels)
+		}
+		if v, ok := confValue(conf.Interface, "BondActive"); ok && !setFlags["bond-active"] {
+			*bondTargetActive = confInt(v, *bondTargetActive)
+		}
+		if v, ok := confValue(conf.Interface, "BondMinActive"); ok && !setFlags["bond-min-active"] {
+			*bondMinActive = confInt(v, *bondMinActive)
+		}
+		parseBondDuration := func(key, flagName string, target *time.Duration) {
+			v, ok := confValue(conf.Interface, key)
+			if !ok || setFlags[flagName] {
+				return
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				log.Fatalf("--config: %s=%q: %v", key, v, err)
+			}
+			*target = d
+		}
+		parseBondDuration("BondPreferredRTT", "bond-preferred-rtt", bondPreferredRTT)
+		parseBondDuration("BondMaxRTT", "bond-max-rtt", bondMaxRTT)
+		parseBondDuration("BondEmergencyRTT", "bond-emergency-rtt", bondEmergencyRTT)
+		parseBondDuration("BondRTTSpread", "bond-rtt-spread", bondRTTSpread)
+
 		if v, ok := confValue(conf.Interface, "Debug"); ok && !setFlags["debug"] {
 			if b, err := strconv.Atoi(v); err == nil {
 				*debug = b
@@ -673,11 +732,44 @@ DEPRECATED (removed in v2)
 		}
 	}
 
+	// Validate transport names and MultiBond limits before any carrier is
+	// started, so configuration mistakes fail fast and predictably.
+	seenTransportNames := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		if strings.TrimSpace(spec.Name) == "" {
+			log.Fatal("transport name must not be empty")
+		}
+		if _, exists := seenTransportNames[spec.Name]; exists {
+			log.Fatalf("duplicate transport name %q", spec.Name)
+		}
+		seenTransportNames[spec.Name] = struct{}{}
+	}
+	if *bondEnabled {
+		switch {
+		case *bondMaxChannels < 1 || *bondMaxChannels > 256:
+			log.Fatalf("--bond-max must be in 1..256, got %d", *bondMaxChannels)
+		case *bondTargetActive < 1 || *bondTargetActive > *bondMaxChannels:
+			log.Fatalf("--bond-active must be in 1..bond-max, got %d", *bondTargetActive)
+		case *bondMinActive < 1 || *bondMinActive > *bondTargetActive:
+			log.Fatalf("--bond-min-active must be in 1..bond-active, got %d", *bondMinActive)
+		case *bondPreferredRTT <= 0:
+			log.Fatalf("--bond-preferred-rtt must be > 0, got %v", *bondPreferredRTT)
+		case *bondMaxRTT <= *bondPreferredRTT:
+			log.Fatalf("--bond-max-rtt (%v) must be greater than preferred RTT (%v)", *bondMaxRTT, *bondPreferredRTT)
+		case *bondEmergencyRTT < *bondMaxRTT:
+			log.Fatalf("--bond-emergency-rtt (%v) must be >= max RTT (%v)", *bondEmergencyRTT, *bondMaxRTT)
+		case *bondRTTSpread <= 0:
+			log.Fatalf("--bond-rtt-spread must be > 0, got %v", *bondRTTSpread)
+		case len(specs) > *bondMaxChannels:
+			log.Fatalf("configured %d transports but --bond-max=%d", len(specs), *bondMaxChannels)
+		}
+	}
+
 	// Validate --codec with the multi-transport path. Session always uses
 	// BatchedTransport, so --codec=legacy is only valid in single-transport
 	// non-negotiated mode.
-	if *negotiate && *codec != codecBatched {
-		log.Fatal("--negotiate requires --codec=batched")
+	if (*negotiate || *bondEnabled) && *codec != codecBatched {
+		log.Fatal("--negotiate/--bond requires --codec=batched")
 	}
 
 	// Encryption secret is mandatory when --negotiate is set.
@@ -725,9 +817,9 @@ DEPRECATED (removed in v2)
 	// [Transport] sections in a .conf describe a multi-transport session
 	// just like --transports; without this they were silently ignored and
 	// only the single --transport ran.
-	if *negotiate || *transportsFlag != "" || len(confTransports) > 0 {
+	if *negotiate || *bondEnabled || *transportsFlag != "" || len(confTransports) > 0 {
 		if secret == "" {
-			log.Fatal("--transports/--negotiate/.conf transports require --encryption-key-file")
+			log.Fatal("--transports/--negotiate/--bond/.conf transports require --encryption-key-file")
 		}
 
 		caps := transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP
@@ -750,6 +842,23 @@ DEPRECATED (removed in v2)
 
 		if err := registerBootstrapTransports(managerInst, specs, config, secret, sessionContext, rooms); err != nil {
 			log.Fatalf("bootstrap transports: %v", err)
+		}
+
+		if *bondEnabled {
+			bcfg := bond.DefaultConfig()
+			bcfg.MaxChannels = *bondMaxChannels
+			bcfg.TargetActive = *bondTargetActive
+			bcfg.MinActive = *bondMinActive
+			bcfg.PreferredRTT = *bondPreferredRTT
+			bcfg.MaxRTT = *bondMaxRTT
+			bcfg.EmergencyMaxRTT = *bondEmergencyRTT
+			bcfg.MaxRTTSpread = *bondRTTSpread
+			if err := sess.EnableBond(bcfg); err != nil {
+				log.Fatalf("enable MultiBond: %v", err)
+			}
+			log.Printf("MultiBond: enabled max=%d target-active=%d min-active=%d preferred-rtt=%v max-rtt=%v emergency-rtt=%v",
+				bcfg.MaxChannels, bcfg.TargetActive, bcfg.MinActive,
+				bcfg.PreferredRTT, bcfg.MaxRTT, bcfg.EmergencyMaxRTT)
 		}
 
 		// Persist each cookie-carrying transport's jar and replay what was
@@ -889,6 +998,10 @@ DEPRECATED (removed in v2)
 		log.Fatalf("Failed to start transport: %v", err)
 	}
 
+	if managerInst != nil {
+		startConfiguredChannelInventory(managerInst, *role)
+	}
+
 	if statusServer != nil && managerInst != nil {
 		utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst) })
 	}
@@ -917,7 +1030,7 @@ DEPRECATED (removed in v2)
 	switch *role {
 	case roleExit:
 		if *shareFlag {
-			session := *negotiate || *transportsFlag != "" || len(confTransports) > 0
+			session := *negotiate || *bondEnabled || *transportsFlag != "" || len(confTransports) > 0
 			host := *shareHost
 			if host == "" {
 				host = publicIPv4()

@@ -46,7 +46,8 @@ func transportFactory(baseCfg transport.TransportConfig) manager.Factory {
 		case "mailru":
 			return mailru.NewMailruDocsTransport(cfg.URL, baseCfg), nil
 		case "cupsonline":
-			return cupsonline.NewCupsonlineTransport(cfg.URL, baseCfg, false), nil
+			exit, _ := cfg.Params["is_exit"].(bool)
+			return cupsonline.NewCupsonlineTransport(cfg.URL, baseCfg, !exit), nil
 		case "oneme":
 			token, _ := cfg.Params["token"].(string)
 			uidStr, _ := cfg.Params["uid"].(string)

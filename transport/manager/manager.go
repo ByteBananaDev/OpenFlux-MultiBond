@@ -8,6 +8,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -426,6 +427,26 @@ func (m *Manager) SetControlCallback(cb func(sub control.Subtype, payload []byte
 //
 // The secret and context are the same values main.go uses for bootstrap
 // transports; they are stored on the Manager at construction time.
+// StartTransport builds and attaches a transport to an already-running
+// Session. It is the local counterpart of SubtypeTransportStart and is used
+// by the channel-inventory reconciler.
+func (m *Manager) StartTransport(cfg *control.TransportConfig) error {
+	return m.startTransport(cfg)
+}
+
+// HasTransport reports whether a transport name is currently attached.
+func (m *Manager) HasTransport(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.entries[name]
+	return ok
+}
+
+// LiveTransports returns carriers that currently reach the authenticated peer.
+func (m *Manager) LiveTransports() []string {
+	return m.session.LiveTransports()
+}
+
 func (m *Manager) startTransport(cfg *control.TransportConfig) error {
 	if cfg == nil || cfg.Name == "" {
 		return errors.New("manager: empty config")
@@ -435,8 +456,19 @@ func (m *Manager) startTransport(cfg *control.TransportConfig) error {
 		return fmt.Errorf("factory: %w", err)
 	}
 	priority := 50
-	if v, ok := cfg.Params["priority"].(float64); ok {
+	switch v := cfg.Params["priority"].(type) {
+	case float64:
 		priority = int(v)
+	case float32:
+		priority = int(v)
+	case int:
+		priority = v
+	case int64:
+		priority = int(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			priority = int(n)
+		}
 	}
 	var provider CookieProvider
 	if p, ok := raw.(CookieProvider); ok {

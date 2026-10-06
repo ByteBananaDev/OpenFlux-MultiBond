@@ -1,0 +1,7 @@
+name,type,priority,url,dial,listen,token,uid,enabled
+direct-01,direct,50,,EXIT_IP:8445,0.0.0.0:8445,,,true
+direct-02,direct,50,,EXIT_IP:8446,0.0.0.0:8446,,,true
+volga-01,vyandex,50,YOUR_VOLGA_DOCUMENT_01,,,,,true
+volga-02,vyandex,50,YOUR_VOLGA_DOCUMENT_02,,,,,true
+mail-01,mailru,50,YOUR_MAILRU_DOCUMENT,,,,,true
+max-01,oneme,50,,,,YOUR_MAX_TOKEN,YOUR_MAX_UID,true

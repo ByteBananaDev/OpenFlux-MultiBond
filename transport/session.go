@@ -164,15 +164,29 @@ func (s *Session) AddTransport(name string, raw Transport, secret, context strin
 	s.links[name] = link
 	s.order = insertByPriority(s.order, name, link.priority, s.links)
 	s.mu.Unlock()
+
+	if err := s.bondRegister(name, fmt.Sprintf("%T", raw)); err != nil {
+		s.mu.Lock()
+		delete(s.links, name)
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+		s.mu.Unlock()
+		return fmt.Errorf("session: bond register %q: %w", name, err)
+	}
+
 	utils.Debugf("[SESSION] AddTransport name=%q type=%T priority=%d", name, raw, priority)
 	return nil
 }
 
 func (s *Session) RemoveTransport(name string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	link, ok := s.links[name]
 	if !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("session: transport %q not found", name)
 	}
 	delete(s.links, name)
@@ -182,7 +196,12 @@ func (s *Session) RemoveTransport(name string) error {
 			break
 		}
 	}
+	s.mu.Unlock()
+
+	// Stop outside s.mu: transport shutdown can wait on I/O and must not
+	// block the Session's send/receive/keepalive paths while it drains.
 	_ = link.batched.Stop()
+	s.bondRemove(name)
 	return nil
 }
 
@@ -239,6 +258,7 @@ func (s *Session) Start() error {
 	}
 	s.wg.Add(1)
 	go s.keepaliveLoop()
+	s.startBondLoop()
 	if exit {
 		utils.Debugf("[SESSION] exit: Start returning, waiting for a client")
 		return nil
@@ -288,6 +308,7 @@ func (s *Session) dumpDiagnostics(why string) {
 
 func (s *Session) startLink(link *transportLink) error {
 	if err := link.batched.Start(); err != nil {
+		s.bondSetConnected(link.name, false)
 		return err
 	}
 	link.batched.Receive(func(p []byte) { s.receive(link, p) })
@@ -302,12 +323,15 @@ func (s *Session) startLink(link *transportLink) error {
 	if stopped {
 		_ = link.batched.Stop()
 		_ = link.raw.Stop()
+		s.bondSetConnected(link.name, false)
 		return errors.New("session stopped")
 	}
+	s.bondSetConnected(link.name, true)
 	// A carrier that comes up in an established session (e.g. once a check
 	// was passed) is probed at once: the pong marks it heard, instead of it
 	// waiting for the next keepalive tick.
 	if ready {
+		s.bondNotePingSent(link.name)
 		go func() { _ = s.sendControlVia(link, control.SubtypeLinkPing, nil) }()
 	}
 	return nil
@@ -410,6 +434,7 @@ func (s *Session) keepaliveLoop() {
 		}
 		s.mu.Unlock()
 		for _, l := range quiet {
+			s.bondNotePingSent(l.name)
 			if err := s.sendControlVia(l, control.SubtypeLinkPing, nil); err != nil {
 				utils.Debugf("[SESSION] LinkPing via %q: %v", l.name, err)
 			} else {
@@ -485,6 +510,7 @@ func (s *Session) Stop() error {
 		}
 	})
 	s.wg.Wait()
+	s.stopBond()
 	return nil
 }
 
@@ -651,22 +677,35 @@ func (s *Session) Send(p []byte) error {
 	}
 	raw = append(raw, p...)
 
-	top := links[:1]
-	for _, l := range links[1:] {
-		if l.priority != links[0].priority {
-			break
-		}
-		top = append(top, l)
-	}
 	key := extractFlowKeyBytes(p)
-	idx := int(flowHashBytes(key) % uint64(len(top)))
-	chosen := top[idx]
+	flowHash := flowHashBytes(key)
+
+	// MultiBond may select any currently-live carrier according to its
+	// adaptive score. With MultiBond disabled (or before its first rebalance)
+	// preserve upstream's equal-priority flow-hash behaviour exactly.
+	chosen := s.bondPickFlow(flowHash, links)
+	if chosen == nil {
+		top := links[:1]
+		for _, l := range links[1:] {
+			if l.priority != links[0].priority {
+				break
+			}
+			top = append(top, l)
+		}
+		idx := int(flowHash % uint64(len(top)))
+		chosen = top[idx]
+	}
 
 	n := s.cntDataSent.Add(1)
 	if n == 1 || n%100 == 0 {
 		utils.Debugf("[SESSION] send IPv4 #%d seq=%d via %q size=%d proto=%d", n, seq, chosen.name, len(p), p[9])
 	}
-	return chosen.batched.Send(raw)
+	err = chosen.batched.Send(raw)
+	s.bondObserveSendResult(chosen.name, err)
+	if err == nil {
+		s.bondObserveBytes(chosen.name, len(raw))
+	}
+	return err
 }
 
 // liveLinksLocked returns the carriers to route through, in priority order.
@@ -1022,6 +1061,7 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 	cb := s.dataCallback
 	s.mu.Unlock()
 	n := s.cntDataRecv.Add(1)
+	s.bondObserveBytes(link.name, len(payload))
 	if n == 1 || n%100 == 0 {
 		utils.Debugf("[SESSION] recv IPv4 #%d seq=%d from %q size=%d proto=%d",
 			n, env.Data.Sequence, link.name, len(payload), payload[9])
@@ -1061,6 +1101,7 @@ func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Env
 	case control.SubtypeLinkPong:
 		s.peerKeepalive = true
 		s.mu.Unlock()
+		s.bondNotePong(link.name)
 		utils.Debugf("[SESSION] LinkPong from %q: peer keepalive enabled", link.name)
 		return
 	}
